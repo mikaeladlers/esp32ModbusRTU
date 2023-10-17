@@ -34,21 +34,22 @@ esp32ModbusRTU::esp32ModbusRTU(HardwareSerial *serial, int8_t rtsPin) : TimeOutV
                                                                         _interval(0),
                                                                         _rtsPin(rtsPin),
                                                                         _task(nullptr),
-                                                                        _queue(nullptr)
+                                                                        _queue(nullptr),
+                                                                        _shutdown(false)
 {
   _queue = xQueueCreate(QUEUE_SIZE, sizeof(ModbusRequest *));
 }
 
 esp32ModbusRTU::~esp32ModbusRTU()
 {
-  shutdown = true;
+  _shutdown = true;
 
   // Clear the queue
-  vQueueReset(_queue);
+  xQueueReset(_queue);
 
-  // Send a empty request to notify the tread that we are shutting down
-  auto request = new ModbusRequest(0);
-  _addToQueue(request);
+  // We may be processing a modbus request, then the queue will be empty so we add another to know
+  // that we are not processing a real modbus request
+  readDiscreteInputs(0, 0, 0);
 
   // Wait until we have processed an outstanding modbus com request if present
   while (uxQueueMessagesWaiting(_queue) > 0)
@@ -143,7 +144,7 @@ void esp32ModbusRTU::_handleConnection(esp32ModbusRTU *instance)
     ModbusRequest *request;
     if (instance->_queue && pdTRUE == xQueueReceive(instance->_queue, &request, portMAX_DELAY))
     {
-      if (instance->shutdown)
+      if (instance->_shutdown)
       {
         delete request;
         continue;
