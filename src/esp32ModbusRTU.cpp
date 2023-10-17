@@ -26,125 +26,189 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #if defined ARDUINO_ARCH_ESP32
 
-using namespace esp32ModbusRTUInternals;  // NOLINT
+using namespace esp32ModbusRTUInternals; // NOLINT
 
-esp32ModbusRTU::esp32ModbusRTU(HardwareSerial* serial, int8_t rtsPin) :
-  TimeOutValue(TIMEOUT_MS),
-  _serial(serial),
-  _lastMillis(0),
-  _interval(0),
-  _rtsPin(rtsPin),
-  _task(nullptr),
-  _queue(nullptr)  {
-    _queue = xQueueCreate(QUEUE_SIZE, sizeof(ModbusRequest*));
+esp32ModbusRTU::esp32ModbusRTU(HardwareSerial *serial, int8_t rtsPin) : TimeOutValue(TIMEOUT_MS),
+                                                                        _serial(serial),
+                                                                        _lastMillis(0),
+                                                                        _interval(0),
+                                                                        _rtsPin(rtsPin),
+                                                                        _task(nullptr),
+                                                                        _queue(nullptr)
+{
+  _queue = xQueueCreate(QUEUE_SIZE, sizeof(ModbusRequest *));
 }
 
-esp32ModbusRTU::~esp32ModbusRTU() {
-  // TODO(bertmelis): kill task and cleanup
+esp32ModbusRTU::~esp32ModbusRTU()
+{
+  shutdown = true;
+
+  // Clear the queue
+  vQueueReset(_queue);
+
+  // Send a empty request to notify the tread that we are shutting down
+  auto request = new ModbusRequest(0);
+  _addToQueue(request);
+
+  // Wait until we have processed an outstanding modbus com request if present
+  while (uxQueueMessagesWaiting(_queue) > 0)
+  {
+    delay(1);
+  }
+
+  vTaskDelete(_task);
+  _task = nullptr;
+
+  auto q = _queue;
+  _queue = nullptr;
+  vQueueDelete(q);
 }
 
-void esp32ModbusRTU::begin(int coreID /* = -1 */) {
+void esp32ModbusRTU::begin(int coreID /* = -1 */)
+{
   // If rtsPin is >=0, the RS485 adapter needs send/receive toggle
-  if (_rtsPin >= 0) {
+  if (_rtsPin >= 0)
+  {
     pinMode(_rtsPin, OUTPUT);
     digitalWrite(_rtsPin, LOW);
   }
   xTaskCreatePinnedToCore((TaskFunction_t)&_handleConnection, "esp32ModbusRTU", 4096, this, 5, &_task, coreID >= 0 ? coreID : NULL);
   // silent interval is at least 3.5x character time
-  _interval = 40000 / _serial->baudRate();  // 4 * 1000 * 10 / baud
-  if (_interval == 0) _interval = 1;  // minimum of 1msec interval
+  _interval = 40000 / _serial->baudRate(); // 4 * 1000 * 10 / baud
+  if (_interval == 0)
+    _interval = 1; // minimum of 1msec interval
 }
 
-bool esp32ModbusRTU::readDiscreteInputs(uint8_t slaveAddress, uint16_t address, uint16_t numberCoils) {
-  ModbusRequest* request = new ModbusRequest02(slaveAddress, address, numberCoils);
+bool esp32ModbusRTU::readDiscreteInputs(uint8_t slaveAddress, uint16_t address, uint16_t numberCoils)
+{
+  ModbusRequest *request = new ModbusRequest02(slaveAddress, address, numberCoils);
   return _addToQueue(request);
 }
-bool esp32ModbusRTU::readHoldingRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters) {
-  ModbusRequest* request = new ModbusRequest03(slaveAddress, address, numberRegisters);
-  return _addToQueue(request);
-}
-
-bool esp32ModbusRTU::readInputRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters) {
-  ModbusRequest* request = new ModbusRequest04(slaveAddress, address, numberRegisters);
-  return _addToQueue(request);
-}
-
-bool esp32ModbusRTU::writeSingleHoldingRegister(uint8_t slaveAddress, uint16_t address, uint16_t data) {
-  ModbusRequest* request = new ModbusRequest06(slaveAddress, address, data);
+bool esp32ModbusRTU::readHoldingRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters)
+{
+  ModbusRequest *request = new ModbusRequest03(slaveAddress, address, numberRegisters);
   return _addToQueue(request);
 }
 
-bool esp32ModbusRTU::writeMultHoldingRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters, uint8_t* data) {
-  ModbusRequest* request = new ModbusRequest16(slaveAddress, address, numberRegisters, data);
+bool esp32ModbusRTU::readInputRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters)
+{
+
+  ModbusRequest *request = new ModbusRequest04(slaveAddress, address, numberRegisters);
   return _addToQueue(request);
 }
 
-void esp32ModbusRTU::onData(esp32Modbus::MBRTUOnData handler) {
+bool esp32ModbusRTU::writeSingleHoldingRegister(uint8_t slaveAddress, uint16_t address, uint16_t data)
+{
+  ModbusRequest *request = new ModbusRequest06(slaveAddress, address, data);
+  return _addToQueue(request);
+}
+
+bool esp32ModbusRTU::writeMultHoldingRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters, uint8_t *data)
+{
+  ModbusRequest *request = new ModbusRequest16(slaveAddress, address, numberRegisters, data);
+  return _addToQueue(request);
+}
+
+void esp32ModbusRTU::onData(esp32Modbus::MBRTUOnData handler)
+{
   _onData = handler;
 }
 
-void esp32ModbusRTU::onError(esp32Modbus::MBRTUOnError handler) {
+void esp32ModbusRTU::onError(esp32Modbus::MBRTUOnError handler)
+{
   _onError = handler;
 }
 
-bool esp32ModbusRTU::_addToQueue(ModbusRequest* request) {
-  if (!request) {
+bool esp32ModbusRTU::_addToQueue(ModbusRequest *request)
+{
+  if (!request)
+  {
     return false;
-  } else if (xQueueSend(_queue, reinterpret_cast<void*>(&request), (TickType_t)0) != pdPASS) {
+  }
+  else if (_task == nullptr || xQueueSend(_queue, reinterpret_cast<void *>(&request), (TickType_t)0) != pdPASS)
+  {
     delete request;
     return false;
-  } else {
+  }
+  else
+  {
     return true;
   }
 }
 
-void esp32ModbusRTU::_handleConnection(esp32ModbusRTU* instance) {
-  while (1) {
-    ModbusRequest* request;
-    if (pdTRUE == xQueueReceive(instance->_queue, &request, portMAX_DELAY)) {  // block and wait for queued item
+void esp32ModbusRTU::_handleConnection(esp32ModbusRTU *instance)
+{
+  while (1)
+  {
+    ModbusRequest *request;
+    if (instance->_queue && pdTRUE == xQueueReceive(instance->_queue, &request, portMAX_DELAY))
+    {
+      if (instance->shutdown)
+      {
+        delete request;
+        continue;
+      }
+
+      // block and wait for queued item
       instance->_send(request->getMessage(), request->getSize());
-      ModbusResponse* response = instance->_receive(request);
-      if (response->isSucces()) {
-        if (instance->_onData) instance->_onData(response->getSlaveAddress(), response->getFunctionCode(), request->getAddress(), response->getData(), response->getByteCount());
-      } else {
-        if (instance->_onError) instance->_onError(response->getError());
+      ModbusResponse *response = instance->_receive(request);
+      if (response->isSucces())
+      {
+        if (instance->_onData)
+          instance->_onData(response->getSlaveAddress(), response->getFunctionCode(), request->getAddress(), response->getData(), response->getByteCount());
+      }
+      else
+      {
+        if (instance->_onError)
+          instance->_onError(response->getError());
       }
       delete request;  // object created in public methods
-      delete response;  // object created in _receive()
+      delete response; // object created in _receive()
     }
   }
 }
 
-void esp32ModbusRTU::_send(uint8_t* data, uint8_t length) {
-  while (millis() - _lastMillis < _interval) delay(1);  // respect _interval
+void esp32ModbusRTU::_send(uint8_t *data, uint8_t length)
+{
+  while (millis() - _lastMillis < _interval)
+    delay(1); // respect _interval
   // Toggle rtsPin, if necessary
-  if (_rtsPin >= 0) digitalWrite(_rtsPin, HIGH);
+  if (_rtsPin >= 0)
+    digitalWrite(_rtsPin, HIGH);
   _serial->write(data, length);
   _serial->flush();
   // Toggle rtsPin, if necessary
-  if (_rtsPin >= 0) digitalWrite(_rtsPin, LOW);
+  if (_rtsPin >= 0)
+    digitalWrite(_rtsPin, LOW);
   _lastMillis = millis();
 }
 
 // Adjust timeout on MODBUS - some slaves require longer/allow for shorter times
-void esp32ModbusRTU::setTimeOutValue(uint32_t tov) {
-  if (tov) TimeOutValue = tov;
+void esp32ModbusRTU::setTimeOutValue(uint32_t tov)
+{
+  if (tov)
+    TimeOutValue = tov;
 }
 
-ModbusResponse* esp32ModbusRTU::_receive(ModbusRequest* request) {
-  ModbusResponse* response = new ModbusResponse(request->responseLength(), request);
-  while (true) {
-    while (_serial->available()) {
+ModbusResponse *esp32ModbusRTU::_receive(ModbusRequest *request)
+{
+  ModbusResponse *response = new ModbusResponse(request->responseLength(), request);
+  while (true)
+  {
+    while (_serial->available())
+    {
       response->add(_serial->read());
     }
-    if (response->isComplete()) {
+    if (response->isComplete())
+    {
       _lastMillis = millis();
       break;
     }
-    if (millis() - _lastMillis > TimeOutValue) {
+    if (millis() - _lastMillis > TimeOutValue)
+    {
       break;
     }
-    delay(1);  // take care of watchdog
+    delay(1); // take care of watchdog
   }
   return response;
 }

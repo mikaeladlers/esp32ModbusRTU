@@ -25,6 +25,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef esp32ModbusRTU_h
 #define esp32ModbusRTU_h
 
+#define ARDUINO_ARCH_ESP32
 #if defined ARDUINO_ARCH_ESP32
 
 #ifndef QUEUE_SIZE
@@ -36,7 +37,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <functional>
 
-extern "C" {
+extern "C"
+{
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -47,29 +49,30 @@ extern "C" {
 #include "esp32ModbusTypeDefs.h"
 #include "ModbusMessage.h"
 
-class esp32ModbusRTU {
- public:
-  explicit esp32ModbusRTU(HardwareSerial* serial, int8_t rtsPin = -1);
+class esp32ModbusRTU
+{
+public:
+  explicit esp32ModbusRTU(HardwareSerial *serial, int8_t rtsPin = -1);
   ~esp32ModbusRTU();
   void begin(int coreID = -1);
   bool readDiscreteInputs(uint8_t slaveAddress, uint16_t address, uint16_t numberCoils);
   bool readHoldingRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters);
   bool readInputRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters);
   bool writeSingleHoldingRegister(uint8_t slaveAddress, uint16_t address, uint16_t data);
-  bool writeMultHoldingRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters, uint8_t* data);
+  bool writeMultHoldingRegisters(uint8_t slaveAddress, uint16_t address, uint16_t numberRegisters, uint8_t *data);
   void onData(esp32Modbus::MBRTUOnData handler);
   void onError(esp32Modbus::MBRTUOnError handler);
   void setTimeOutValue(uint32_t tov);
 
- private:
-  bool _addToQueue(esp32ModbusRTUInternals::ModbusRequest* request);
-  static void _handleConnection(esp32ModbusRTU* instance);
-  void _send(uint8_t* data, uint8_t length);
-  esp32ModbusRTUInternals::ModbusResponse* _receive(esp32ModbusRTUInternals::ModbusRequest* request);
+private:
+  bool _addToQueue(esp32ModbusRTUInternals::ModbusRequest *request);
+  static void _handleConnection(esp32ModbusRTU *instance);
+  void _send(uint8_t *data, uint8_t length);
+  esp32ModbusRTUInternals::ModbusResponse *_receive(esp32ModbusRTUInternals::ModbusRequest *request);
 
- private:
+private:
   uint32_t TimeOutValue;
-  HardwareSerial* _serial;
+  HardwareSerial *_serial;
   uint32_t _lastMillis;
   uint32_t _interval;
   int8_t _rtsPin;
@@ -77,6 +80,8 @@ class esp32ModbusRTU {
   QueueHandle_t _queue;
   esp32Modbus::MBRTUOnData _onData;
   esp32Modbus::MBRTUOnError _onError;
+
+  bool shutdown = false;
 };
 
 #endif
