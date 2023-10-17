@@ -24,7 +24,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #ifndef esp32ModbusRTU_h
 #define esp32ModbusRTU_h
-#define ARDUINO_ARCH_ESP32
+
 #if defined ARDUINO_ARCH_ESP32
 
 #ifndef QUEUE_SIZE
@@ -80,7 +80,7 @@ private:
   esp32Modbus::MBRTUOnData _onData;
   esp32Modbus::MBRTUOnError _onError;
 
-  bool shutdown = false;
+  bool _shutdown = false;
 };
 
 #endif
